@@ -1,0 +1,161 @@
+# Pipeline QAOps - Sistema de Situacao Academica
+# Cada job e um quality gate. Se um gate falha, os jobs dependentes nao executam
+# e o pipeline fica vermelho (bloqueio). Com branch protection, o merge e impedido.
+name: Pipeline de Qualidade
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false  # preserva cada execucao no historico (experimento)
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------- Gate 1: Build / validacao ----------------
+  build:
+    name: "Gate 1 - Dependencias e build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+      - name: Validar sintaxe (compileall)
+        run: python -m compileall -q app
+      - name: Empacotar aplicacao (wheel + sdist)
+        run: python -m build
+      - name: Smoke test - aplicacao inicializa
+        run: python -c "from app.api import create_app; c=create_app().test_client(); r=c.get('/health'); assert r.status_code==200, r; print(r.get_json())"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pacote-distribuicao
+          path: dist/
+          retention-days: 14
+
+  # ---------------- Gate 2: Analise estatica ----------------
+  lint:
+    name: "Gate 2 - Analise estatica (Ruff)"
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Ruff lint (erros, bugs, seguranca, complexidade)
+        run: |
+          mkdir -p reports
+          ruff check . --output-format=github
+          ruff check . --output-format=json > reports/ruff.json || true
+      - name: Ruff format (padrao de formatacao)
+        run: ruff format --check .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: relatorio-analise-estatica
+          path: reports/
+
+  # ---------------- Gates 3 e 4: Testes + Cobertura ----------------
+  test:
+    name: "Gates 3 e 4 - Testes e cobertura"
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Executar testes unitarios e de integracao (Gate 3)
+        run: |
+          mkdir -p reports
+          pytest --junitxml=reports/junit.xml \
+                 --cov=app --cov-report=xml:reports/coverage.xml \
+                 --cov-report=html:reports/htmlcov --cov-report=term-missing \
+                 --cov-fail-under=0
+      - name: Verificar cobertura minima de 90% (Gate 4)
+        run: python -m coverage report --fail-under=90
+      - name: Resumo no GitHub
+        if: always()
+        run: |
+          echo "## Resultado dos testes" >> "$GITHUB_STEP_SUMMARY"
+          python scripts/resumo_junit.py reports/junit.xml >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python -m coverage report >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: relatorio-testes-cobertura
+          path: reports/
+
+  # ---------------- Gate 5: Dependencias vulneraveis ----------------
+  security:
+    name: "Gate 5 - Auditoria de dependencias (pip-audit)"
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install pip-audit==2.10.1
+      - name: Auditar requirements.txt (OSV / PyPI Advisory)
+        run: |
+          mkdir -p reports
+          pip-audit -r requirements.txt --format json --output reports/pip-audit.json || true
+          pip-audit -r requirements.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: relatorio-dependencias
+          path: reports/
+
+  # ---------------- Decisao final ----------------
+  quality-gate:
+    name: "Decisao final - Quality Gate"
+    runs-on: ubuntu-latest
+    needs: [build, lint, test, security]
+    if: always()
+    steps:
+      - name: Consolidar resultado dos gates
+        run: |
+          {
+            echo "## Decisao do Quality Gate"
+            echo "| Gate | Resultado |"
+            echo "|---|---|"
+            echo "| 1 - Build | ${{ needs.build.result }} |"
+            echo "| 2 - Analise estatica | ${{ needs.lint.result }} |"
+            echo "| 3/4 - Testes e cobertura | ${{ needs.test.result }} |"
+            echo "| 5 - Dependencias | ${{ needs.security.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for r in "${{ needs.build.result }}" "${{ needs.lint.result }}" "${{ needs.test.result }}" "${{ needs.security.result }}"; do
+            if [ "$r" != "success" ]; then
+              echo "**REPROVADO** - alteracao bloqueada." >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Quality gate reprovado"; exit 1
+            fi
+          done
+          echo "**APROVADO** - alteracao pode avancar." >> "$GITHUB_STEP_SUMMARY"

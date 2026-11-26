@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kanban-qaops"
+version = "1.0.0"
+description = "Kanban basico (API + pagina web) - projeto DevOps/QAOps"
+requires-python = ">=3.11"
+dependencies = ["flask>=3.0"]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.setuptools.package-data]
+app = ["static/*.html"]
+
+# ---------- Gate: analise estatica ----------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/W: estilo PEP8 | F: erros logicos (pyflakes) | B: bugs comuns (bugbear)
+# S: seguranca (regras do Bandit) | I: imports | C90: complexidade ciclomatica
+select = ["E", "W", "F", "B", "S", "I", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # assert e permitido em testes
+
+# ---------- Testes e cobertura ----------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kanban</title>
+<style>
+  :root { --bg:#F4F1EA; --ink:#0F1B2D; --col:#E7E2D6; --card:#FBFAF6; --blue:#2F6FB3; --amber:#F2A541; --red:#C2410C; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: Arial, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--ink); color:var(--bg); padding:16px 24px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+  h1 { margin:0; font-size:22px; }
+  form { display:flex; gap:8px; flex-wrap:wrap; }
+  input, select, button { font-size:15px; padding:8px 10px; border-radius:6px; border:1px solid #9aa3b0; }
+  button { cursor:pointer; background:var(--amber); border:none; font-weight:bold; }
+  #erro { color:var(--red); padding:8px 24px; min-height:20px; font-weight:bold; }
+  main { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; padding:0 24px 24px; }
+  .coluna { background:var(--col); border-radius:10px; padding:12px; min-height:300px; }
+  .coluna h2 { font-size:16px; margin:4px 0 12px; display:flex; justify-content:space-between; }
+  .card { background:var(--card); border-left:5px solid var(--blue); border-radius:8px; padding:10px; margin-bottom:10px; }
+  .card.ALTA { border-left-color:var(--red); }
+  .card.BAIXA { border-left-color:#8a94a3; }
+  .card p { margin:0 0 8px; }
+  .card small { color:#4A5568; }
+  .acoes { display:flex; gap:6px; margin-top:6px; }
+  .acoes button { padding:4px 10px; font-size:14px; background:var(--col); }
+  @media (max-width: 700px) { main { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kanban</h1>
+  <form id="novo">
+    <input id="titulo" placeholder="Nova tarefa" maxlength="100" required>
+    <select id="prioridade"><option>BAIXA</option><option selected>MEDIA</option><option>ALTA</option></select>
+    <button type="submit">Adicionar</button>
+  </form>
+</header>
+<div id="erro"></div>
+<main id="quadro"></main>
+<script>
+const COLUNAS = [["A_FAZER","A fazer"],["FAZENDO","Fazendo"],["FEITO","Feito"]];
+const erro = document.getElementById("erro");
+
+async function chamar(url, opcoes = {}) {
+  const resp = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opcoes });
+  if (!resp.ok) { const corpo = await resp.json().catch(() => ({})); throw new Error(corpo.erro || resp.status); }
+  return resp.status === 204 ? null : resp.json();
+}
+
+async function desenhar() {
+  const [cards, resumo] = await Promise.all([chamar("/api/cards"), chamar("/api/resumo")]);
+  const quadro = document.getElementById("quadro");
+  quadro.innerHTML = "";
+  COLUNAS.forEach(([chave, nome], i) => {
+    const col = document.createElement("section");
+    col.className = "coluna";
+    const extra = chave === "FAZENDO" ? ` (WIP livre: ${resumo.wip_livre})` : "";
+    col.innerHTML = `<h2><span>${nome}</span><span>${resumo.colunas[chave]}${extra}</span></h2>`;
+    cards.filter(c => c.coluna === chave).forEach(c => {
+      const el = document.createElement("div");
+      el.className = "card " + c.prioridade;
+      const p = document.createElement("p"); p.textContent = c.titulo;
+      const s = document.createElement("small"); s.textContent = "#" + c.id + " · " + c.prioridade;
+      const acoes = document.createElement("div"); acoes.className = "acoes";
+      if (i > 0) acoes.append(botao("←", () => mover(c.id, COLUNAS[i - 1][0])));
+      if (i < 2) acoes.append(botao("→", () => mover(c.id, COLUNAS[i + 1][0])));
+      acoes.append(botao("✕", () => remover(c.id)));
+      el.append(p, s, acoes);
+      col.append(el);
+    });
+    quadro.append(col);
+  });
+}
+
+function botao(texto, acao) { const b = document.createElement("button"); b.textContent = texto; b.onclick = acao; return b; }
+async function executar(fn) { erro.textContent = ""; try { await fn(); } catch (e) { erro.textContent = e.message; } await desenhar(); }
+const mover = (id, coluna) => executar(() => chamar(`/api/cards/${id}/mover`, { method: "POST", body: JSON.stringify({ coluna }) }));
+const remover = id => executar(() => chamar(`/api/cards/${id}`, { method: "DELETE" }));
+
+document.getElementById("novo").onsubmit = e => {
+  e.preventDefault();
+  const titulo = document.getElementById("titulo").value;
+  const prioridade = document.getElementById("prioridade").value;
+  executar(() => chamar("/api/cards", { method: "POST", body: JSON.stringify({ titulo, prioridade }) }));
+  document.getElementById("titulo").value = "";
+};
+desenhar();
+</script>
+</body>
+</html>
