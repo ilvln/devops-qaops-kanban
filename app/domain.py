@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 
 COLUNAS = ("A_FAZER", "FAZENDO", "FEITO")
 COLUNA_WIP = "FAZENDO"
-LIMITE_WIP = 4
+LIMITE_WIP = 3
 TITULO_MAX = 100
 PRIORIDADES = ("BAIXA", "MEDIA", "ALTA")
 
